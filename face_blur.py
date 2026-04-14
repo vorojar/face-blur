@@ -52,6 +52,7 @@ def parse_args():
     p.add_argument("-p", "--padding", type=float, default=0.3, help="人脸轮廓外扩比例 (默认: 0.3)")
     p.add_argument("--mode", choices=["gaussian", "mosaic"], default="gaussian", help="模糊模式 (默认: gaussian)")
     p.add_argument("--min-confidence", type=float, default=0.3, help="人脸检测最低置信度 (默认: 0.3)")
+    p.add_argument("--min-face-size", type=int, default=40, help="人脸最小边长(像素)，低于此值不打码 (默认: 40)")
     p.add_argument("--detect-interval", type=int, default=3, help="每隔N帧检测一次人脸 (默认: 3)")
     p.add_argument("--preview", action="store_true", help="实时预览（按 q 退出）")
     return p.parse_args()
@@ -64,29 +65,39 @@ def make_output_path(input_path: str, output_path: str | None) -> str:
     return str(p.with_stem(p.stem + "_mosaic"))
 
 
-def blur_face_region(frame, contour_pts, strength, mode):
+def blur_face_region(frame, contour_pts, strength, mode, min_face_size=0):
     """只对人脸 ROI 区域做模糊，边缘柔化过渡。"""
     x, y, rw, rh = cv2.boundingRect(contour_pts)
     if rw == 0 or rh == 0:
         return
+    if min(rw, rh) < min_face_size:
+        return
 
-    roi = frame[y:y+rh, x:x+rw].copy()
-    local_pts = contour_pts - np.array([x, y])
-
-    mask = np.zeros((rh, rw), dtype=np.uint8)
-    cv2.fillConvexPoly(mask, local_pts, 255)
     feather = max(3, min(rw, rh) // 8) | 1
+    H, W = frame.shape[:2]
+    # ROI 向外扩展 feather 大小的 margin，确保羽化过渡不被边界截断
+    x0 = max(x - feather, 0)
+    y0 = max(y - feather, 0)
+    x1 = min(x + rw + feather, W)
+    y1 = min(y + rh + feather, H)
+    roi_w, roi_h = x1 - x0, y1 - y0
+
+    roi = frame[y0:y1, x0:x1].copy()
+    local_pts = contour_pts - np.array([x0, y0])
+
+    mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, local_pts, 255)
     mask_float = cv2.GaussianBlur(mask, (feather, feather), 0).astype(np.float32) / 255.0
 
     if mode == "gaussian":
         k = strength | 1
         blurred = cv2.GaussianBlur(roi, (k, k), 0)
     else:
-        small = cv2.resize(roi, (max(1, rw // strength), max(1, rh // strength)), interpolation=cv2.INTER_LINEAR)
-        blurred = cv2.resize(small, (rw, rh), interpolation=cv2.INTER_NEAREST)
+        small = cv2.resize(roi, (max(1, roi_w // strength), max(1, roi_h // strength)), interpolation=cv2.INTER_LINEAR)
+        blurred = cv2.resize(small, (roi_w, roi_h), interpolation=cv2.INTER_NEAREST)
 
     mask_3ch = np.stack([mask_float, mask_float, mask_float], axis=-1)
-    target = frame[y:y+rh, x:x+rw]
+    target = frame[y0:y1, x0:x1]
     blended = (blurred.astype(np.float32) * mask_3ch + target.astype(np.float32) * (1 - mask_3ch))
     np.copyto(target, blended.astype(np.uint8))
 
@@ -192,7 +203,7 @@ def process_video(args):
     print(f"输入: {input_path}")
     print(f"分辨率: {width}x{height} | FPS: {fps:.1f} | 时长: {fmt_time(duration)} | 总帧数: {total_frames}")
     print(f"编码器: {encoder}")
-    print(f"模式: {args.mode} | 模糊强度: {args.strength} | 外扩: {args.padding} | 检测间隔: {args.detect_interval}帧")
+    print(f"模式: {args.mode} | 模糊强度: {args.strength} | 外扩: {args.padding} | 最小人脸: {args.min_face_size}px | 检测间隔: {args.detect_interval}帧")
 
     ffmpeg_cmd = [
         "ffmpeg", "-y",
@@ -271,7 +282,7 @@ def process_video(args):
 
             t0 = time.monotonic()
             for contour in cached_contours:
-                blur_face_region(frame, contour, args.strength, args.mode)
+                blur_face_region(frame, contour, args.strength, args.mode, args.min_face_size)
             t_blur_total += time.monotonic() - t0
 
             ffmpeg_proc.stdin.write(frame.tobytes())
