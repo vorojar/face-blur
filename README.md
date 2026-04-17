@@ -30,6 +30,7 @@ python3 face_blur.py your_video.mp4
 | `-s, --strength` | 模糊强度，越大越模糊 | `80` |
 | `-p, --padding` | 人脸轮廓外扩比例 | `0.3` |
 | `--mode` | `gaussian`（高斯模糊）或 `mosaic`（马赛克） | `gaussian` |
+| `--min-face-size` | 人脸最小边长(像素)，低于此值不打码 | `40` |
 | `--detect-interval` | 每 N 帧检测一次（提速） | `3` |
 | `--min-confidence` | 人脸检测最低置信度 | `0.3` |
 | `--preview` | 实时预览处理效果 | - |
@@ -62,7 +63,7 @@ python3 face_blur.py video.mp4 --preview
 输入: video.mp4
 分辨率: 1280x720 | FPS: 30.0 | 时长: 30.0s | 总帧数: 901
 编码器: h264_videotoolbox
-模式: gaussian | 模糊强度: 80 | 外扩: 0.3 | 检测间隔: 3帧
+模式: gaussian | 模糊强度: 80 | 外扩: 0.3 | 最小人脸: 40px | 检测间隔: 3帧
 处理进度: 901/901 (100.0%)
 检测到人脸总次数: 268
 

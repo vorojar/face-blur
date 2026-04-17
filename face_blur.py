@@ -31,7 +31,6 @@ import argparse
 import platform
 import time
 
-import numpy as np
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import (
     FaceDetector, FaceDetectorOptions,
@@ -206,7 +205,7 @@ def process_video(args):
     print(f"模式: {args.mode} | 模糊强度: {args.strength} | 外扩: {args.padding} | 最小人脸: {args.min_face_size}px | 检测间隔: {args.detect_interval}帧")
 
     ffmpeg_cmd = [
-        "ffmpeg", "-y",
+        "ffmpeg", "-y", "-loglevel", "error", "-nostats",
         "-f", "rawvideo", "-pix_fmt", "bgr24",
         "-s", f"{width}x{height}", "-r", str(fps),
         "-i", "pipe:0",
@@ -285,7 +284,11 @@ def process_video(args):
                 blur_face_region(frame, contour, args.strength, args.mode, args.min_face_size)
             t_blur_total += time.monotonic() - t0
 
-            ffmpeg_proc.stdin.write(frame.tobytes())
+            try:
+                ffmpeg_proc.stdin.write(frame.tobytes())
+            except BrokenPipeError:
+                print('\nFFmpeg 提前退出，停止送帧', file=sys.stderr)
+                break
 
             if args.preview:
                 cv2.imshow("Face Blur Preview", frame)
