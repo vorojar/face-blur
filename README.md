@@ -2,6 +2,8 @@
 
 一键给视频中所有人脸打上高斯模糊，支持正脸、侧脸、多人脸，30秒视频处理只需约8秒。
 
+![demo](assets/demo.gif)
+
 ## 特性
 
 - **双模型检测** — FaceLandmarker 精准轮廓 + FaceDetector 侧脸兜底，不漏脸
