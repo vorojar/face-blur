@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="color-scheme" content="dark" />
+<title>Face Blur — 一键给视频人脸打码</title>
+<meta name="description" content="双模型检测 + 468 关键点轮廓的视频人脸打码工具，硬件加速编码，3.6× 实时处理速度。" />
+<meta property="og:title" content="Face Blur — 一键给视频人脸打码" />
+<meta property="og:description" content="双模型检测 + 468 关键点轮廓的视频人脸打码工具，3.6× 实时处理。" />
+<meta property="og:type" content="website" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --bg:         oklch(10% 0.005 260);
+    --bg-elev:    oklch(14% 0.008 260);
+    --bg-card:    oklch(17% 0.010 260);
+    --border:     oklch(26% 0.012 260);
+    --border-bright: oklch(38% 0.015 260);
+    --fg:         oklch(96% 0.004 260);
+    --fg-muted:   oklch(68% 0.010 260);
+    --fg-dim:     oklch(50% 0.010 260);
+
+    --accent:     oklch(88% 0.19 95);
+    --accent-hi:  oklch(94% 0.16 95);
+    --accent-ink: oklch(15% 0.02 95);
+
+    --cell: 14px; /* 像素块基准尺寸 */
+    --r: 2px;     /* 尖锐圆角，和 pixel 语义一致 */
+    --gutter: clamp(20px, 4vw, 56px);
+    --section-gap: clamp(96px, 14vh, 160px);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Space Grotesk", "Noto Sans SC", ui-sans-serif, system-ui, sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+  ::selection { background: var(--accent); color: var(--accent-ink); }
+
+  a { color: inherit; text-decoration: none; }
+  code, kbd, pre { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* ===== 像素背景母题 ===== */
+  .pixel-bg {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: var(--cell) var(--cell);
+    opacity: .22;
+    mask-image: radial-gradient(ellipse 85% 70% at 50% 0%, #000 20%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 85% 70% at 50% 0%, #000 20%, transparent 75%);
+  }
+
+  main { position: relative; z-index: 1; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: var(--gutter); }
+
+  /* ===== NAV ===== */
+  nav {
+    position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(14px);
+    background: color-mix(in oklab, var(--bg) 72%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap {
+    display: flex; align-items: center; justify-content: space-between;
+    height: 64px;
+  }
+  .brand {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-weight: 600; letter-spacing: -0.01em; font-size: 16px;
+  }
+  .brand-mark {
+    width: 26px; height: 26px;
+    display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+    gap: 2px;
+  }
+  .brand-mark span {
+    background: var(--fg-muted); border-radius: 1px;
+  }
+  .brand-mark span:nth-child(1),
+  .brand-mark span:nth-child(2),
+  .brand-mark span:nth-child(4) { background: var(--accent); }
+  .brand-mark span:nth-child(5) { background: var(--fg); }
+  nav ul {
+    display: flex; gap: 28px; margin: 0; padding: 0; list-style: none;
+    font-size: 14px; color: var(--fg-muted);
+  }
+  nav ul a:hover { color: var(--fg); }
+  @media (max-width: 720px) { nav ul { display: none; } }
+
+  /* ===== HERO ===== */
+  .hero {
+    padding-block: clamp(72px, 12vh, 140px) clamp(60px, 10vh, 120px);
+    position: relative;
+  }
+  .kicker {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--fg-muted);
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-elev);
+  }
+  .kicker::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 30%, transparent);
+  }
+  h1.title {
+    margin: 28px 0 20px;
+    font-size: clamp(3.2rem, 9vw, 7.2rem);
+    line-height: 0.92;
+    letter-spacing: -0.04em;
+    font-weight: 500;
+    text-wrap: balance;
+  }
+  h1.title .yel { color: var(--accent); }
+  h1.title .bar {
+    display: inline-block;
+    background: var(--accent); color: var(--accent-ink);
+    padding: 0 0.15em 0.02em;
+    border-radius: var(--r);
+  }
+  .sub {
+    max-width: 56ch;
+    font-size: clamp(1.05rem, 1.6vw, 1.3rem);
+    color: var(--fg-muted);
+    line-height: 1.55;
+    text-wrap: pretty;
+    margin: 0 0 36px;
+  }
+  .sub strong { color: var(--fg); font-weight: 500; }
+
+  .cta-row {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    margin-bottom: 44px;
+  }
+  .btn {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 14px 22px;
+    border-radius: var(--r);
+    font-weight: 500; font-size: 15px;
+    transition: transform .15s ease, background .15s ease, color .15s ease;
+  }
+  .btn-primary {
+    background: var(--accent); color: var(--accent-ink);
+    border: 1px solid var(--accent);
+  }
+  .btn-primary:hover { background: var(--accent-hi); transform: translateY(-1px); }
+  .btn-ghost {
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--border-bright);
+  }
+  .btn-ghost:hover { background: var(--bg-elev); border-color: var(--fg-dim); }
+  .btn svg { width: 18px; height: 18px; }
+
+  /* HERO STATS STRIP */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin-top: 28px;
+  }
+  .stat { padding: 22px 0; }
+  .stat + .stat { border-left: 1px solid var(--border); padding-left: 24px; }
+  .stat-num {
+    font-size: clamp(1.6rem, 3vw, 2.3rem); font-weight: 600;
+    letter-spacing: -0.02em; color: var(--fg);
+    font-family: "Space Grotesk", sans-serif;
+  }
+  .stat-num .unit { color: var(--fg-muted); font-size: .6em; margin-left: 4px; font-weight: 400; }
+  .stat-label {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--fg-dim); margin-top: 6px;
+  }
+  @media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(3) { border-left: none; padding-left: 0; }
+    .stat:nth-child(3), .stat:nth-child(4) { border-top: 1px solid var(--border); }
+  }
+
+  /* ===== DEMO ===== */
+  .demo {
+    margin-top: var(--section-gap);
+    position: relative;
+  }
+  .demo-frame {
+    position: relative;
+    border: 1px solid var(--border-bright);
+    border-radius: var(--r);
+    overflow: hidden;
+    background: #000;
+    aspect-ratio: auto;
+  }
+  .demo-frame img { display: block; width: 100%; height: auto; }
+  .demo-frame::before {
+    content: "";
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, transparent 0%, transparent 85%, color-mix(in oklab, #000 50%, transparent) 100%);
+    pointer-events: none;
+  }
+  .demo-caption {
+    display: flex; justify-content: space-between; align-items: center;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px; color: var(--fg-dim);
+    padding: 14px 2px 0;
+    letter-spacing: .05em;
+  }
+  .demo-caption .dot { width: 6px; height: 6px; background: var(--accent); border-radius: 50%; display: inline-block; margin-right: 8px; }
+
+  /* ===== SECTIONS ===== */
+  section { margin-top: var(--section-gap); }
+  .section-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 20px;
+    margin-bottom: 44px;
+  }
+  .section-head h2 {
+    margin: 0;
+    font-size: clamp(2rem, 4.4vw, 3.2rem);
+    font-weight: 500; letter-spacing: -0.025em; line-height: 1.05;
+    text-wrap: balance;
+    max-width: 18ch;
+  }
+  .section-head .eyebrow {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px; text-transform: uppercase; letter-spacing: .16em;
+    color: var(--fg-dim);
+  }
+
+  /* ===== FEATURE GRID ===== */
+  .features {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+  }
+  .feature {
+    padding: 36px 32px 40px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .feature-idx {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: .14em;
+    color: var(--fg-dim);
+    margin-bottom: 24px;
+  }
+  .feature h3 {
+    margin: 0 0 10px;
+    font-size: 1.25rem; font-weight: 600; letter-spacing: -0.01em;
+    color: var(--fg);
+  }
+  .feature p {
+    margin: 0;
+    color: var(--fg-muted); font-size: 15px; line-height: 1.6;
+  }
+  .feature .feature-kw { color: var(--accent); font-weight: 500; }
+  @media (max-width: 920px) { .features { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .features { grid-template-columns: 1fr; } }
+
+  /* ===== INSTALL ===== */
+  .install-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: 48px;
+    align-items: start;
+  }
+  @media (max-width: 820px) {
+    .install-grid { grid-template-columns: 1fr; gap: 32px; }
+  }
+  .install-copy p {
+    color: var(--fg-muted); margin: 0 0 16px;
+  }
+  .install-copy ul {
+    list-style: none; padding: 0; margin: 24px 0 0;
+    font-family: "JetBrains Mono", monospace; font-size: 13px;
+    color: var(--fg-muted);
+  }
+  .install-copy li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .install-copy li::before {
+    content: "→"; color: var(--accent); font-weight: 700;
+  }
+  .code-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--r);
+    position: relative;
+    overflow: hidden;
+  }
+  .code-block-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-card);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; color: var(--fg-dim);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .copy-btn {
+    border: 1px solid var(--border-bright);
+    background: transparent;
+    color: var(--fg-muted);
+    font: inherit; font-size: 11px;
+    padding: 4px 10px; border-radius: var(--r);
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .code-block pre {
+    margin: 0; padding: 22px 20px;
+    font-size: 14px; line-height: 1.7;
+    overflow-x: auto;
+    color: var(--fg);
+  }
+  .code-block .c-comment { color: var(--fg-dim); }
+  .code-block .c-prompt  { color: var(--accent); user-select: none; }
+  .code-block .c-cmd     { color: var(--fg); }
+  .code-block .c-flag    { color: color-mix(in oklab, var(--accent) 70%, var(--fg) 30%); }
+
+  /* ===== TABLE ===== */
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--r); }
+  table {
+    width: 100%; border-collapse: collapse;
+    font-size: 14px;
+  }
+  thead th {
+    background: var(--bg-elev);
+    text-align: left; font-weight: 500;
+    padding: 14px 20px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  tbody td {
+    padding: 14px 20px;
+    border-bottom: 1px solid var(--border);
+    color: var(--fg);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  tbody td.default { color: var(--fg-muted); font-family: "JetBrains Mono", monospace; font-size: 13px; }
+
+  /* ===== ARCH BLOCK ===== */
+  .arch-block {
+    background: var(--bg-elev);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--r);
+    padding: 32px clamp(20px, 4vw, 48px);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    line-height: 1.9;
+    color: var(--fg-muted);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .arch-block .hl { color: var(--fg); }
+  .arch-block .ac { color: var(--accent); }
+
+  /* ===== HW TABLE ===== */
+  .hw-grid {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 0;
+    border-top: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+  }
+  @media (max-width: 920px) { .hw-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .hw-grid { grid-template-columns: 1fr; } }
+  .hw {
+    padding: 24px 20px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .hw-plat {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--fg-dim);
+    margin-bottom: 10px;
+  }
+  .hw-enc {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 14px; color: var(--fg);
+    margin-bottom: 14px;
+  }
+  .hw-speed {
+    font-size: 2rem; font-weight: 600; letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  .hw-speed .unit { color: var(--fg-muted); font-size: .5em; margin-left: 4px; font-weight: 400; }
+
+  /* ===== USE CASES ===== */
+  .cases {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    overflow: hidden;
+  }
+  @media (max-width: 820px) { .cases { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 500px) { .cases { grid-template-columns: 1fr; } }
+  .case {
+    padding: 28px 24px;
+    border-right: 1px solid var(--border);
+  }
+  .case:last-child { border-right: none; }
+  @media (max-width: 820px) {
+    .case { border-bottom: 1px solid var(--border); }
+    .case:nth-child(2) { border-right: none; }
+    .case:nth-child(3), .case:nth-child(4) { border-bottom: none; }
+  }
+  .case-num {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px; letter-spacing: .14em; color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .case-t { font-weight: 500; margin-bottom: 6px; color: var(--fg); font-size: 15px; }
+  .case-d { color: var(--fg-muted); font-size: 14px; line-height: 1.55; }
+
+  /* ===== BIG CTA ===== */
+  .bigcta {
+    margin-top: var(--section-gap);
+    padding: clamp(56px, 10vh, 100px) var(--gutter);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--r);
+    text-align: center;
+    background:
+      radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--accent) 8%, transparent) 0%, transparent 60%),
+      var(--bg-elev);
+    position: relative;
+    overflow: hidden;
+  }
+  .bigcta::before {
+    content: ""; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: calc(var(--cell) * 1.5) calc(var(--cell) * 1.5);
+    opacity: .25;
+    mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, #000 10%, transparent 70%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, #000 10%, transparent 70%);
+    pointer-events: none;
+  }
+  .bigcta > * { position: relative; z-index: 1; }
+  .bigcta h2 {
+    font-size: clamp(2.2rem, 5vw, 3.6rem);
+    font-weight: 500; letter-spacing: -0.025em; line-height: 1.05;
+    margin: 0 0 18px;
+    text-wrap: balance;
+  }
+  .bigcta p {
+    color: var(--fg-muted); margin: 0 0 32px;
+    max-width: 52ch; margin-inline: auto;
+  }
+
+  /* ===== FOOTER ===== */
+  footer {
+    margin-top: 120px;
+    border-top: 1px solid var(--border);
+    padding: 40px 0 60px;
+    color: var(--fg-dim);
+    font-size: 13px;
+  }
+  footer .wrap {
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 16px;
+    font-family: "JetBrains Mono", monospace;
+  }
+  footer a:hover { color: var(--accent); }
+
+  /* blur-in animation */
+  @keyframes blurIn {
+    from { filter: blur(16px); opacity: 0; transform: translateY(6px); }
+    to   { filter: blur(0);   opacity: 1; transform: none; }
+  }
+  .blur-in {
+    animation: blurIn .9s cubic-bezier(.2,.7,.1,1) both;
+  }
+  .blur-in:nth-child(2) { animation-delay: .08s; }
+  .blur-in:nth-child(3) { animation-delay: .16s; }
+  .blur-in:nth-child(4) { animation-delay: .24s; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; scroll-behavior: auto !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="pixel-bg" aria-hidden="true"></div>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </span>
+      Face Blur
+    </a>
+    <ul>
+      <li><a href="#demo">效果</a></li>
+      <li><a href="#features">特性</a></li>
+      <li><a href="#install">安装</a></li>
+      <li><a href="#params">参数</a></li>
+      <li><a href="#arch">架构</a></li>
+      <li><a href="https://github.com/vorojar/face-blur" target="_blank" rel="noopener">GitHub ↗</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main id="top">
+  <section class="hero wrap">
+    <span class="kicker blur-in">Python · MediaPipe · FFmpeg</span>
+    <h1 class="title blur-in">
+      一键给视频<br />
+      <span class="bar">每一张脸</span><br />
+      <span class="yel">打上马赛克。</span>
+    </h1>
+    <p class="sub blur-in">
+      <strong>双模型检测 + 468 关键点人脸轮廓</strong>。沿面部精准羽化，不是粗暴矩形框。正脸、侧脸、多人脸一锅端，硬件加速直出，30 秒视频 8 秒处理完。
+    </p>
+    <div class="cta-row blur-in">
+      <a class="btn btn-primary" href="https://github.com/vorojar/face-blur" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.2 11.4.6.1.82-.26.82-.58v-2.02c-3.34.72-4.05-1.61-4.05-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.94 0-1.31.47-2.39 1.24-3.23-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.63-5.49 5.93.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.82.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+        GitHub 开源仓库
+      </a>
+      <a class="btn btn-ghost" href="#install">一行命令安装 →</a>
+    </div>
+
+    <div class="stats blur-in" aria-label="核心指标">
+      <div class="stat">
+        <div class="stat-num">3.6<span class="unit">× 实时</span></div>
+        <div class="stat-label">处理速度</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">468<span class="unit">点</span></div>
+        <div class="stat-label">人脸关键点</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">2<span class="unit">+ 模型</span></div>
+        <div class="stat-label">检测兜底</div>
+      </div>
+      <div class="stat">
+        <div class="stat-num">0<span class="unit">配置</span></div>
+        <div class="stat-label">开箱即用</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- DEMO -->
+  <section class="wrap" id="demo">
+    <div class="demo-frame">
+      <img src="assets/demo.gif" alt="Face Blur 处理前后对比：原视频与打码后视频并排播放" />
+    </div>
+    <div class="demo-caption">
+      <span><span class="dot"></span>LIVE DEMO · 原视频 / 打码后对比</span>
+      <span>assets/demo.gif</span>
+    </div>
+  </section>
+
+  <!-- FEATURES -->
+  <section class="wrap" id="features">
+    <div class="section-head">
+      <span class="eyebrow">// Features</span>
+      <h2>每一帧都按<br />人脸的形状打码。</h2>
+    </div>
+    <div class="features">
+      <div class="feature">
+        <div class="feature-idx">01 / 06</div>
+        <h3>双模型检测</h3>
+        <p><span class="feature-kw">FaceLandmarker</span> 精准轮廓 + <span class="feature-kw">FaceDetector</span> 侧脸兜底。正脸、侧脸、戴口罩、低头——不漏脸。</p>
+      </div>
+      <div class="feature">
+        <div class="feature-idx">02 / 06</div>
+        <h3>468 点轮廓打码</h3>
+        <p>沿面部关键点拟合多边形，不是粗暴矩形。头发、背景、脖子都保留，只糊脸。</p>
+      </div>
+      <div class="feature">
+        <div class="feature-idx">03 / 06</div>
+        <h3>边缘羽化</h3>
+        <p>alpha 渐变混合，打码区域与原图自然过渡。<span class="feature-kw">零硬边</span>，和原始画面融为一体。</p>
+      </div>
+      <div class="feature">
+        <div class="feature-idx">04 / 06</div>
+        <h3>硬件加速编码</h3>
+        <p>自动识别 <span class="feature-kw">VideoToolbox / NVENC / QSV / AMF</span>，直走 GPU 编码器。macOS 5×、NVIDIA 8× 实时。</p>
+      </div>
+      <div class="feature">
+        <div class="feature-idx">05 / 06</div>
+        <h3>管道直出</h3>
+        <p>原始帧通过 pipe 直接喂 FFmpeg，<span class="feature-kw">无中间文件、无二次编码</span>。画质无损、磁盘干净。</p>
+      </div>
+      <div class="feature">
+        <div class="feature-idx">06 / 06</div>
+        <h3>零配置运行</h3>
+        <p>首次运行自动建 <code>.venv</code>、装依赖。<span class="feature-kw">一行命令</span>，不用懂 Python 环境。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- INSTALL -->
+  <section class="wrap" id="install">
+    <div class="section-head">
+      <span class="eyebrow">// Quick Start</span>
+      <h2>系统有 Python 3 和 FFmpeg，剩下的它自己来。</h2>
+    </div>
+    <div class="install-grid">
+      <div class="install-copy">
+        <p>把 <code>face_blur.py</code> 丢到视频同目录，一行命令跑起来。没有依赖预装步骤——工具会自己创建虚拟环境、拉 mediapipe 和 opencv-python、启动硬件编码器。</p>
+        <ul>
+          <li>Python 3.10+</li>
+          <li>FFmpeg（系统安装）</li>
+          <li>2.2 MB 脚本 · 无 Docker · 无外部服务</li>
+        </ul>
+      </div>
+      <div>
+        <div class="code-block" id="code-basic">
+          <div class="code-block-head">
+            <span>bash · default (gaussian blur)</span>
+            <button class="copy-btn" data-copy-target="code-basic-pre">COPY</button>
+          </div>
+<pre id="code-basic-pre"><span class="c-comment"># 克隆仓库</span>
+<span class="c-prompt">$</span> <span class="c-cmd">git clone https://github.com/vorojar/face-blur.git</span>
+<span class="c-prompt">$</span> <span class="c-cmd">cd face-blur</span>
+
+<span class="c-comment"># 直接跑（首次运行自动装依赖）</span>
+<span class="c-prompt">$</span> <span class="c-cmd">python3 face_blur.py</span> your_video.mp4
+
+<span class="c-comment"># 马赛克模式 + 加大打码范围</span>
+<span class="c-prompt">$</span> <span class="c-cmd">python3 face_blur.py</span> video.mp4 <span class="c-flag">--mode</span> mosaic <span class="c-flag">-p</span> 0.5</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- USE CASES -->
+  <section class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">// Use cases</span>
+      <h2>什么时候该用它。</h2>
+    </div>
+    <div class="cases">
+      <div class="case">
+        <div class="case-num">CASE 01</div>
+        <div class="case-t">街拍 vlog 路人脸</div>
+        <div class="case-d">商业街拍摄到的路人，发布前批量打码避免肖像权纠纷。</div>
+      </div>
+      <div class="case">
+        <div class="case-num">CASE 02</div>
+        <div class="case-t">采访 / 调研素材</div>
+        <div class="case-d">匿名受访者保护，一键处理长时长素材，无需手动打码每一帧。</div>
+      </div>
+      <div class="case">
+        <div class="case-num">CASE 03</div>
+        <div class="case-t">教学 / 演示录屏</div>
+        <div class="case-d">课堂监控回放、会议录像脱敏，合规发布到公开平台。</div>
+      </div>
+      <div class="case">
+        <div class="case-num">CASE 04</div>
+        <div class="case-t">数据集脱敏</div>
+        <div class="case-d">视频数据集发布前去识别化处理，保留动作/场景特征，隐去身份。</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PARAMS -->
+  <section class="wrap" id="params">
+    <div class="section-head">
+      <span class="eyebrow">// CLI parameters</span>
+      <h2>8 个参数，按需调。</h2>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>参数</th><th>说明</th><th>默认值</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>-o, --output</td><td>输出文件路径</td><td class="default">输入文件名_mosaic.mp4</td></tr>
+          <tr><td>-s, --strength</td><td>模糊强度，越大越模糊</td><td class="default">80</td></tr>
+          <tr><td>-p, --padding</td><td>人脸轮廓外扩比例</td><td class="default">0.3</td></tr>
+          <tr><td>--mode</td><td>gaussian（高斯模糊）/ mosaic（马赛克）</td><td class="default">gaussian</td></tr>
+          <tr><td>--min-face-size</td><td>人脸最小边长（像素），低于此值不打码</td><td class="default">40</td></tr>
+          <tr><td>--detect-interval</td><td>每 N 帧检测一次（提速）</td><td class="default">3</td></tr>
+          <tr><td>--min-confidence</td><td>人脸检测最低置信度</td><td class="default">0.3</td></tr>
+          <tr><td>--preview</td><td>实时预览处理效果</td><td class="default">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ARCH -->
+  <section class="wrap" id="arch">
+    <div class="section-head">
+      <span class="eyebrow">// Pipeline</span>
+      <h2>一条流水线，<br />没有中间产物。</h2>
+    </div>
+<div class="arch-block">
+<span class="hl">视频输入</span>
+  │
+  ▼
+<span class="hl">OpenCV</span> 逐帧读取
+  │
+  ├─ <span class="ac">MediaPipe FaceLandmarker</span> → 468 点人脸轮廓（正脸 / 微侧脸）
+  ├─ <span class="ac">MediaPipe FaceDetector</span>   → 矩形框转椭圆（侧脸兜底）
+  ├─ 去重合并
+  │
+  ▼
+<span class="hl">高斯模糊 + 羽化 mask + alpha 混合</span>
+  │
+  ▼
+管道 <span class="ac">pipe</span> → <span class="ac">FFmpeg</span> 硬件加速编码 + 原音轨 copy
+  │
+  ▼
+<span class="hl">输出 MP4</span>
+</div>
+  </section>
+
+  <!-- HARDWARE -->
+  <section class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">// Hardware acceleration</span>
+      <h2>自动挑最快的编码器。</h2>
+    </div>
+    <div class="hw-grid">
+      <div class="hw">
+        <div class="hw-plat">macOS · Apple Silicon</div>
+        <div class="hw-enc">h264_videotoolbox</div>
+        <div class="hw-speed">5<span class="unit">× 实时</span></div>
+      </div>
+      <div class="hw">
+        <div class="hw-plat">NVIDIA GPU</div>
+        <div class="hw-enc">h264_nvenc</div>
+        <div class="hw-speed">8<span class="unit">× 实时</span></div>
+      </div>
+      <div class="hw">
+        <div class="hw-plat">AMD GPU</div>
+        <div class="hw-enc">h264_amf</div>
+        <div class="hw-speed">5<span class="unit">× 实时</span></div>
+      </div>
+      <div class="hw">
+        <div class="hw-plat">Intel iGPU</div>
+        <div class="hw-enc">h264_qsv</div>
+        <div class="hw-speed">5<span class="unit">× 实时</span></div>
+      </div>
+      <div class="hw">
+        <div class="hw-plat">CPU fallback</div>
+        <div class="hw-enc">libx264</div>
+        <div class="hw-speed">1<span class="unit">× 实时</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- BIG CTA -->
+  <section class="wrap">
+    <div class="bigcta">
+      <h2>现在就给你的视频打码。</h2>
+      <p>开源 · MIT License · 可以 fork 可以改 可以商用。星标一下让更多人用上。</p>
+      <div class="cta-row" style="justify-content: center;">
+        <a class="btn btn-primary" href="https://github.com/vorojar/face-blur" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.37.5 0 5.87 0 12.5c0 5.3 3.44 9.8 8.2 11.4.6.1.82-.26.82-.58v-2.02c-3.34.72-4.05-1.61-4.05-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.84 2.82 1.31 3.51 1 .11-.78.42-1.31.76-1.61-2.67-.3-5.47-1.33-5.47-5.94 0-1.31.47-2.39 1.24-3.23-.12-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.24 1.92 1.24 3.23 0 4.62-2.81 5.63-5.49 5.93.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.82.58A12.01 12.01 0 0 0 24 12.5C24 5.87 18.63.5 12 .5z"/></svg>
+          Star on GitHub
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/vorojar/face-blur/issues" target="_blank" rel="noopener">
+          提 Issue / 反馈
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>Face Blur © MIT License</div>
+    <div>
+      <a href="https://github.com/vorojar/face-blur" target="_blank" rel="noopener">github.com/vorojar/face-blur</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Copy-to-clipboard
+  document.querySelectorAll(".copy-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const target = document.getElementById(btn.dataset.copyTarget);
+      if (!target) return;
+      const text = target.innerText.replace(/^\$\s*/gm, "");
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = btn.textContent;
+        btn.textContent = "COPIED";
+        btn.classList.add("copied");
+        setTimeout(() => {
+          btn.textContent = original;
+          btn.classList.remove("copied");
+        }, 1400);
+      } catch {
+        btn.textContent = "ERR";
+      }
+    });
+  });
+</script>
+</body>
+</html>
